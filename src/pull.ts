@@ -2,7 +2,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import matter from 'gray-matter';
 import { requireInit, loadState, saveState, detectProjectConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit } from './utils/git.js';
 import { flushPendingLearnings } from './utils/pending-learnings.js';
 import { log, spinner } from './utils/logger.js';
 import { pathExists, remove, listFiles, listDirs, readFileSafe } from './utils/fs.js';
@@ -107,6 +107,24 @@ async function refreshTeamRepo(
     log.debug('Rev check failed, proceeding with full sync');
     version = null;
   }
+
+  // Skills distributed as git submodules are not populated by clone/fetch.
+  // Opt-in via teamai.yaml `submodules: true`; runs before the resource
+  // deploy step so the freshly checked-out content is what gets deployed.
+  // Pre-gate on .gitmodules so repos without submodules never parse config.
+  if (fse.existsSync(path.join(localConfig.repo.localPath, '.gitmodules'))) {
+    try {
+      const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+      if (teamConfig?.submodules === true) {
+        const git = createGit(localConfig.repo.localPath);
+        await git.submoduleUpdate(['--init', '--depth', '1']);
+        log.debug('Submodules updated');
+      }
+    } catch (e) {
+      log.warn(`Submodule update failed: ${(e as Error).message}`);
+    }
+  }
+
   return { label: result, version, reportingOnly: false };
 }
 

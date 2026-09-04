@@ -1126,6 +1126,19 @@ Auto-update runs in the Stop hook and is controlled by two tiers:
 
 The user-level `updatePolicy` always takes priority over the team-level `autoUpdate`.
 
+### Git submodules
+
+If your team distributes skills as git submodules, opt in with `submodules: true`
+in `teamai.yaml`:
+
+```yaml
+submodules: true
+```
+
+On every pull, teamai runs `git submodule update --init --depth 1` so
+submodule-based skills are populated and kept current (git-repo backends only).
+Disabled by default.
+
 ### CI Integration
 
 `teamai ci extract-mr` plugs into your CI pipeline, automatically extracting knowledge from every MR/PR:

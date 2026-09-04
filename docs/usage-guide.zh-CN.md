@@ -1121,6 +1121,17 @@ teamai remove wiki <name>
 
 用户级 `updatePolicy` 始终优先于团队级 `autoUpdate`。
 
+### Git 子模块
+
+若团队以 git submodule 形式分发 skill，在 `teamai.yaml` 中开启 `submodules: true`：
+
+```yaml
+submodules: true
+```
+
+每次 pull 时 teamai 会执行 `git submodule update --init --depth 1`（仅 git 仓后端
+生效），自动填充并更新子模块。默认关闭。
+
 ### CI 集成
 
 `teamai ci extract-mr` 接入 CI 流水线，从每个 MR/PR 自动提取知识：
