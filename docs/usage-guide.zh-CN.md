@@ -1132,6 +1132,15 @@ submodules: true
 每次 pull 时 teamai 会执行 `git submodule update --init --depth 1`（仅 git 仓后端
 生效），自动填充并更新子模块。默认关闭。
 
+### 使用统计上报
+
+默认情况下，`teamai pull` 会把会话/使用统计提交进团队仓。从只读远端拉取（或
+不想要统计提交）的团队可在 `teamai.yaml` 中关闭：
+
+```yaml
+usageReport: false
+```
+
 ### CI 集成
 
 `teamai ci extract-mr` 接入 CI 流水线，从每个 MR/PR 自动提取知识：

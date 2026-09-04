@@ -128,6 +128,11 @@ async function refreshTeamRepo(
   return { label: result, version, reportingOnly: false };
 }
 
+/** teamai.yaml `usageReport: false` — per-repo opt-out of stat commits. */
+async function usageReportDisabled(repoPath: string): Promise<boolean> {
+  return (await loadTeamConfig(repoPath))?.usageReport === false;
+}
+
 async function buildRolePullContext(localConfig: LocalConfig): Promise<RolePullContext | null> {
   if (!localConfig.primaryRole) return null;
 
@@ -1334,49 +1339,53 @@ export async function pull(options: GlobalOptions): Promise<void> {
   //    Scope filtering: project scope only gets sessions whose cwd is under
   //    projectRoot; user scope excludes those sessions.
   if (!options.dryRun) {
-    try {
-      const { reportUsageToTeam } = await import('./team-push.js');
-      const { truncateUsageAfterReport, readUsageEvents } = await import('./usage-tracker.js');
-      const targets: Array<{ repoPath: string; username: string; opts: { skipTruncate: true; projectRoot?: string; excludeProjectRoots?: string[]; selfConfig?: LocalConfig } }> = [];
-      if (projectConfig && projectConfig.repo.kind !== 'http') {
-        targets.push({
-          repoPath: projectConfig.repo.localPath,
-          username: projectConfig.username,
-          opts: {
-            skipTruncate: true,
-            projectRoot: projectConfig.projectRoot,
-            // Self mode routes stats/votes to the teamai-reports orphan branch.
-            ...(projectConfig.repo.kind === 'self' ? { selfConfig: projectConfig } : {}),
-          },
-        });
-      }
-      if (activeUserConfig && activeUserConfig.repo.kind !== 'http') {
-        targets.push({
-          repoPath: activeUserConfig.repo.localPath,
-          username: activeUserConfig.username,
-          opts: {
-            skipTruncate: true,
-            excludeProjectRoots: projectConfig?.projectRoot ? [projectConfig.projectRoot] : [],
-            // Self mode routes stats/votes to the teamai-reports orphan branch —
-            // never reset/pull the business repo working tree.
-            ...(activeUserConfig.repo.kind === 'self' ? { selfConfig: activeUserConfig } : {}),
-          },
-        });
-      }
+    // Per-target opt-out (teamai.yaml `usageReport: false`): a repo that
+    // disables stat commits is dropped from the report targets — e.g. teams
+    // pulling from a read-only remote never accumulate unpushable commits.
+    const targets: Array<{ repoPath: string; username: string; opts: { skipTruncate: true; projectRoot?: string; excludeProjectRoots?: string[]; selfConfig?: LocalConfig } }> = [];
+    if (projectConfig && projectConfig.repo.kind !== 'http'
+      && !await usageReportDisabled(projectConfig.repo.localPath)) {
+      targets.push({
+        repoPath: projectConfig.repo.localPath,
+        username: projectConfig.username,
+        opts: {
+          skipTruncate: true,
+          projectRoot: projectConfig.projectRoot,
+          // Self mode routes stats/votes to the teamai-reports orphan branch.
+          ...(projectConfig.repo.kind === 'self' ? { selfConfig: projectConfig } : {}),
+        },
+      });
+    }
+    if (activeUserConfig && activeUserConfig.repo.kind !== 'http'
+      && !await usageReportDisabled(activeUserConfig.repo.localPath)) {
+      targets.push({
+        repoPath: activeUserConfig.repo.localPath,
+        username: activeUserConfig.username,
+        opts: {
+          skipTruncate: true,
+          excludeProjectRoots: projectConfig?.projectRoot ? [projectConfig.projectRoot] : [],
+          // Self mode routes stats/votes to the teamai-reports orphan branch —
+          // never reset/pull the business repo working tree.
+          ...(activeUserConfig.repo.kind === 'self' ? { selfConfig: activeUserConfig } : {}),
+        },
+      });
+    }
 
-      const eventCount = (await readUsageEvents()).length;
-      for (const t of targets) {
-        try {
-          await reportUsageToTeam(t.repoPath, t.username, t.opts);
-        } catch (e) {
-          log.error(`Auto-report to ${t.repoPath} skipped: ${(e as Error).message}`);
-        }
+    const { reportUsageToTeam } = await import('./team-push.js');
+    const { truncateUsageAfterReport, readUsageEvents } = await import('./usage-tracker.js');
+
+    const eventCount = (await readUsageEvents()).length;
+    for (const t of targets) {
+      try {
+        await reportUsageToTeam(t.repoPath, t.username, t.opts);
+      } catch (e) {
+        log.error(`Auto-report to ${t.repoPath} skipped: ${(e as Error).message}`);
       }
-      if (eventCount > 0 && targets.length > 0) {
-        await truncateUsageAfterReport(eventCount);
-      }
-    } catch (e) {
-      log.debug(`Auto-report skipped: ${(e as Error).message}`);
+    }
+    // Truncate only what was reported — an opted-out repo keeps its local
+    // event log (the dashboard still reads it).
+    if (eventCount > 0 && targets.length > 0) {
+      await truncateUsageAfterReport(eventCount);
     }
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "teamai-cli",
-  "version": "0.22.0-er.2",
+  "version": "0.22.0-er.6",
   "description": "TeamAI — the team harness for AI agents (skill sync + shared knowledge base, powered by Git)",
   "type": "module",
   "bin": {

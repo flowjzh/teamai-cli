@@ -1139,6 +1139,16 @@ On every pull, teamai runs `git submodule update --init --depth 1` so
 submodule-based skills are populated and kept current (git-repo backends only).
 Disabled by default.
 
+### Usage reporting
+
+By default, `teamai pull` commits session/usage stats into the team repo.
+Teams that pull from a read-only remote (or simply don't want stat commits)
+can turn this off in `teamai.yaml`:
+
+```yaml
+usageReport: false
+```
+
 ### CI Integration
 
 `teamai ci extract-mr` plugs into your CI pipeline, automatically extracting knowledge from every MR/PR:
