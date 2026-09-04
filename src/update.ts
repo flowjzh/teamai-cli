@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import fse from 'fs-extra';
 import { loadState, saveState, loadLocalConfig, loadTeamConfig } from './config.js';
 import { resolveEffectiveUpdatePolicy } from './update-policy.js';
@@ -46,6 +48,48 @@ export function resolveRegistryForPackage(pkgName: string): string {
 }
 
 /**
+ * Resolve the npm CLI belonging to the running Node. Bundled runtimes
+ * (WorkBuddy/CodeBuddy) ship npm inside their install dir, and their hook
+ * subprocesses have no npm on PATH, so prefer the co-located npm-cli.js and
+ * fall back to `npm` from PATH.
+ */
+function resolveNpmCommand(): { cmd: string; args: string[] } {
+  const nodeDir = path.dirname(process.execPath);
+  // Both npm layouts are probed on every platform: a layout mismatch must not
+  // silently disable self-update in exactly the PATH-less contexts this
+  // resolver exists for.
+  const candidates = [
+    path.join(nodeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join(nodeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return { cmd: process.execPath, args: [c] };
+  }
+  log.debug('No npm-cli.js found next to the running Node; falling back to npm from PATH');
+  return { cmd: 'npm', args: [] };
+}
+
+/**
+ * Resolve the install prefix the running CLI lives in
+ * (<prefix>/node_modules/<pkg>/...) so a self-update reinstalls into the
+ * same location. Returns null when the entry cannot be attributed to an
+ * npm-managed install (e.g. a linked checkout) — callers then keep the
+ * default global install behavior.
+ */
+function resolveInstallPrefix(): string | null {
+  const entry = fileURLToPath(import.meta.url);
+  const marker = `${path.sep}node_modules${path.sep}`;
+  const idx = entry.lastIndexOf(marker);
+  if (idx <= 0) return null;
+  const prefix = entry.slice(0, idx);
+  // Sanity-check the slice: only trust it when the running package actually
+  // sits at <prefix>/node_modules/<pkg>, i.e. an npm-managed layout.
+  return fs.existsSync(path.join(prefix, 'node_modules', getCurrentPackageName()))
+    ? prefix
+    : null;
+}
+
+/**
  * Fetch the latest version from the npm registry
  * Returns null on any error (timeout, network, etc.)
  *
@@ -61,9 +105,10 @@ export async function fetchLatestVersion(
     // Async execFile so the hook dispatcher's event loop is not blocked while
     // the registry is queried — a synchronous execSync here would freeze all
     // sibling Stop handlers for up to `timeout` ms.
+    const npm = resolveNpmCommand();
     const { stdout } = await execFileAsync(
-      'npm',
-      ['view', pkgName, 'version', `--registry=${resolvedRegistry}`],
+      npm.cmd,
+      [...npm.args, 'view', pkgName, 'version', `--registry=${resolvedRegistry}`],
       { timeout, encoding: 'utf-8' },
     );
     const version = stdout.trim();
@@ -421,9 +466,16 @@ export async function doUpdate(): Promise<void> {
   try {
     const pkgName = getCurrentPackageName();
     const registry = resolveRegistryForPackage(pkgName);
+    const npm = resolveNpmCommand();
+    const prefix = resolveInstallPrefix();
     await execFileAsync(
-      'npm',
-      ['install', '-g', pkgName, `--registry=${registry}`],
+      npm.cmd,
+      [
+        ...npm.args,
+        'install', '-g', pkgName,
+        ...(prefix ? [`--prefix=${prefix}`] : []),
+        `--registry=${registry}`,
+      ],
       { timeout: INSTALL_TIMEOUT },
     );
     log.success(`Updated teamai to v${result.latest}`);

@@ -233,7 +233,7 @@ describe('checkForUpdate', () => {
 
     expect(mockedExecSync).toHaveBeenCalledTimes(1);
     expect(mockedExecSync).toHaveBeenCalledWith(
-      'npm',
+      expect.any(String),
       expect.arrayContaining(['view', 'version']),
       expect.any(Object),
     );
@@ -309,7 +309,7 @@ describe('doUpdate', () => {
 
     expect(mockedExecSync).toHaveBeenCalledTimes(3);
     expect(mockedExecSync).toHaveBeenCalledWith(
-      'npm',
+      expect.any(String),
       expect.arrayContaining(['install', '-g']),
       expect.any(Object),
     );
@@ -404,7 +404,7 @@ describe('doUpdate', () => {
     // Only the version-check exec ran; no npm install
     expect(mockedExecSync).toHaveBeenCalledTimes(1);
     expect(mockedExecSync).not.toHaveBeenCalledWith(
-      'npm',
+      expect.any(String),
       expect.arrayContaining(['install']),
       expect.anything(),
     );
@@ -435,7 +435,7 @@ describe('doUpdate', () => {
     await doUpdate();
 
     expect(mockedExecSync).toHaveBeenCalledWith(
-      'npm',
+      expect.any(String),
       expect.arrayContaining(['install', '-g']),
       expect.any(Object),
     );
@@ -548,7 +548,7 @@ describe('checkForUpdate with corrupted state', () => {
     const result = await checkForUpdate();
 
     expect(mockedExecSync).toHaveBeenCalledWith(
-      'npm',
+      expect.any(String),
       expect.arrayContaining(['view', 'version']),
       expect.any(Object),
     );
