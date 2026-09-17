@@ -212,9 +212,6 @@ export const SOURCE_PULL_TTL_MS = 24 * 60 * 60 * 1000;
 
 export const TEAMAI_SOURCES_DIR = path.join(getUserHome(), '.teamai', 'sources');
 
-/** Budget for a team post-pull script that declares none. */
-export const DEFAULT_POST_PULL_TIMEOUT_SEC = 300;
-
 export const TeamaiConfigSchema = z.object({
   team: z.string(),
   description: z.string().default(''),
@@ -262,9 +259,6 @@ export const TeamaiConfigSchema = z.object({
      * member's machine. */
     postPull: z.object({
       path: z.string().min(1),
-      /** Wall-clock budget in seconds; the script is killed when it expires.
-       * Default 300. */
-      timeoutSec: z.number().positive().optional(),
     }).optional(),
   }).optional(),
   // MCP paths are only set for tools whose config location has been verified.

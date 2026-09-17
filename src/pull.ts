@@ -35,6 +35,7 @@ import { loadProjectsManifest, resolveProjectResourceNamespaces, mergeNamespaces
 import { getUserHome } from './utils/home.js';
 import { acquireLock, releaseLock } from './update.js';
 import { mirrorLearnings } from './utils/learnings-mirror.js';
+import { runDeclaredPostPull } from './post-pull.js';
 
 interface RolePullContext {
   activeNamespaces: ResourceNamespaces;
@@ -1503,7 +1504,7 @@ export async function pull(options: GlobalOptions): Promise<void> {
   // from every clone-consuming stage (idempotent — the next pull syncs it).
   const contended = new Set<LocalConfig>();
   const heldLocks = new Map<LocalConfig, string>();
-  // Team repo whose pull completed, for `scripts.postPull` — launched once the
+  // Team repo whose pull completed, for `scripts.postPull` — run once the
   // whole pipeline is done and its locks are released.
   let postPullRepo: string | null = null;
   const lockScope = async (config: LocalConfig): Promise<boolean> => {
@@ -1712,13 +1713,12 @@ export async function pull(options: GlobalOptions): Promise<void> {
   }
 
   // 6. Team post-pull scripts (teamai.yaml `scripts.postPull`): the team's own
-  //    hook into "the pull finished". Launched after the sync locks are released
-  //    so the script's own git/resource work cannot contend with this pull, and
-  //    detached + unawaited so neither the pull nor the host hook that triggered
-  //    it waits for it. Nothing here can fail the pull — see post-pull.ts.
+  //    hook into "the pull finished". Run in-process after the sync locks are
+  //    released so the script's own git/resource work cannot contend with this
+  //    pull; the pull waits for the deploy under the post-pull budget. Nothing
+  //    here can fail the pull — see post-pull.ts.
   if (!options.dryRun && postPullRepo) {
-    const { launchDeclaredPostPull } = await import('./post-pull.js');
-    await launchDeclaredPostPull(postPullRepo);
+    await runDeclaredPostPull(postPullRepo);
   }
 }
 

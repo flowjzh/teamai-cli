@@ -80,7 +80,7 @@ const LOCAL_AGENT_TIMEOUT_MS = 15_000;
  * budget silently cut the pull short. Size any background handler that must
  * finish accordingly: this one only bounds a wedged git otherwise.
  */
-const PULL_TIMEOUT_MS = 120_000;
+export const PULL_TIMEOUT_MS = 120_000;
 
 // ─── Handler implementations ────────────────────────────
 //

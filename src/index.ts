@@ -758,25 +758,6 @@ program
   });
 
 program
-  .command('post-pull-run', { hidden: true })
-  .description('Internal: run a team post-pull script under its deadline (detached child)')
-  .requiredOption('--repo <path>', 'Team repo root the script belongs to')
-  .requiredOption('--script <path>', 'Absolute path of the script to run')
-  .requiredOption('--timeout-sec <seconds>', 'Wall-clock budget before the script is killed', (v) => {
-    const n = Number.parseInt(v, 10);
-    if (!Number.isFinite(n) || n <= 0) throw new Error(`invalid --timeout-sec: ${v}`);
-    return n;
-  })
-  .action(async (cmdOpts: { repo: string; script: string; timeoutSec: string }) => {
-    const { runPostPull } = await import('./post-pull.js');
-    await runPostPull({
-      repoPath: cmdOpts.repo,
-      scriptPath: cmdOpts.script,
-      timeoutSec: Number.parseInt(cmdOpts.timeoutSec, 10),
-    });
-  });
-
-program
   .command('bind-project')
   .description('Bind the current workspace to a ClawPro project for HTTP local-agent sync')
   .option('--project-id <id>', 'Project ID from /projects/mine')
