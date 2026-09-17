@@ -681,6 +681,12 @@ export interface GlobalOptions {
   claude?: boolean;
   verbose?: boolean;
   silent?: boolean;
+  /**
+   * A human ran the command (the CLI sets it from !--silent): background work
+   * may attach to the user's terminal and run on unawaited. Absent = headless
+   * (hook) caller: everything must be waited out and captured instead.
+   */
+  interactive?: boolean;
   /** Force full sync even when repo HEAD matches lastPullRev. */
   force?: boolean;
   /** Push a specific skill by path. */

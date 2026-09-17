@@ -10,23 +10,22 @@
  * locks are released, and record the outcome so a quiet machine is still
  * diagnosable.
  *
- * The script runs inside the pull process itself. On the session-start path
- * that process is the detached child that already escaped the host's job
- * object (see hook-dispatch-cli.ts), so nothing here needs a second escape or
- * a supervisor: the script inherits that child's hidden console, and it
- * outlives nothing the pull does not. The pull waits for it under a budget —
- * see {@link runPostPull}.
+ * The script runs as a child of the pull process itself — no supervisor, no
+ * second escape: on the session-start path that process already left the
+ * host's job object (see hook-dispatch-cli.ts), so the script survives the
+ * host by construction and inherits the child's hidden console. How the pull
+ * launches it depends on who triggered the pull — see the two launch shapes
+ * below.
  */
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
-import type { Socket } from 'node:net';
+import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process';
 
 import { loadTeamConfig } from './config.js';
 import { withTimeout } from './utils/async.js';
 import { log } from './utils/logger.js';
-import { captureTail } from './utils/exec.js';
+import { captureTail, detachChild } from './utils/exec.js';
 import { assertSafePath } from './utils/path-safety.js';
 import { redactWithEnv } from './utils/redact.js';
 import type { TeamaiConfig } from './types.js';
@@ -35,10 +34,17 @@ import type { TeamaiConfig } from './types.js';
 const TAIL_CHARS = 400;
 
 /**
- * How long the pull waits for the script before giving up on it. Sized to fit
- * under the pull handler's own budget (PULL_TIMEOUT_MS) minus a cold pull's
- * measured worst case (~25s), so the script's outcome line lands before the
- * handler deadline can exit the process — a test pins the relation.
+ * Measured worst case of a cold pull (fetch + submodules + reconcile): the
+ * part of the pull handler's budget the deploy wait cannot have. Named so the
+ * sizing relation has one spelling - the guard test reads it.
+ */
+export const COLD_PULL_WORST_CASE_MS = 25_000;
+
+/**
+ * How long the pull waits for the script before giving up on it. Must fit
+ * under the pull handler's own budget (PULL_TIMEOUT_MS) minus a cold pull,
+ * so the script's outcome line lands before the handler deadline can exit
+ * the process - the test pins the relation.
  */
 export const POST_PULL_BUDGET_SEC = 90;
 
@@ -61,8 +67,15 @@ function resolvePostPullScript(teamConfig: TeamaiConfig, repoPath: string): stri
  * Run the team's post-pull script for one pulled scope, if it declares one.
  * Never throws: a team script rides on the pull, so a bad path, a missing file
  * or a failed spawn is one log line — not a failed sync.
+ *
+ * `interactive` picks the launch shape: the hook path (a headless pull) passes
+ * nothing and waits the script out under the budget; a human-triggered pull
+ * passes true and gets the fire-and-forget shape.
  */
-export async function runDeclaredPostPull(repoPath: string): Promise<void> {
+export async function runDeclaredPostPull(
+  repoPath: string,
+  { interactive = false }: { interactive?: boolean } = {},
+): Promise<void> {
   try {
     const teamConfig = await loadTeamConfig(repoPath);
     if (!teamConfig) return;
@@ -72,15 +85,51 @@ export async function runDeclaredPostPull(repoPath: string): Promise<void> {
       log.debug(`postPull: declared script not found: ${scriptPath}`);
       return;
     }
-    await runPostPull(scriptPath, repoPath);
+    if (interactive) {
+      runPostPullInteractive(scriptPath, repoPath);
+    } else {
+      await runPostPull(scriptPath, repoPath);
+    }
   } catch (e) {
     log.debug(`postPull: skipped: ${(e as Error).message}`);
   }
 }
 
 /**
- * Run one script in-process and wait for it under the budget. Never throws —
- * the log line is the whole point.
+ * Interactive `teamai pull`: launch the script fire-and-forget into the user's
+ * terminal and return at once — the deploy's output streams where the user can
+ * see it, and there is nothing here that must outlive the prompt. Safe because
+ * this pull was spawned by the user's shell, not by a kill-on-exit hook host:
+ * no job object to escape, and no deadline to fit. The script still self-limits
+ * its heavy step against the exported budget.
+ */
+function runPostPullInteractive(scriptPath: string, repoPath: string): void {
+  const child = spawnScript(scriptPath, repoPath, ['ignore', 'inherit', 'inherit'], POST_PULL_BUDGET_SEC);
+  detachChild(child);
+  log.debug(`postPull: launched path=${scriptPath} budget=${POST_PULL_BUDGET_SEC}s (unawaited, terminal attached)`);
+}
+
+/** Launch the team's script under our node, handing it the repo and its budget. */
+function spawnScript(
+  scriptPath: string,
+  repoPath: string,
+  stdio: StdioOptions,
+  budgetSec: number,
+): ChildProcess {
+  return spawn(process.execPath, [scriptPath], {
+    cwd: repoPath,
+    stdio,
+    env: {
+      ...process.env,
+      TEAMAI_REPO: repoPath,
+      TEAMAI_POSTPULL_TIMEOUT_SEC: String(budgetSec),
+    },
+  });
+}
+
+/**
+ * Headless launch shape: run the script and wait for it under the budget.
+ * Never throws — the log line is the whole point.
  *
  * The budget only bounds how long the pull waits. On expiry the pull stops
  * waiting and the script is left running: killing a deploy mid-flight strands
@@ -96,15 +145,7 @@ export async function runPostPull(
 ): Promise<void> {
   log.debug(`postPull: launched path=${scriptPath} budget=${budgetSec}s`);
   const startedAt = Date.now();
-  const child = spawn(process.execPath, [scriptPath], {
-    cwd: repoPath,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      TEAMAI_REPO: repoPath,
-      TEAMAI_POSTPULL_TIMEOUT_SEC: String(budgetSec),
-    },
-  });
+  const child = spawnScript(scriptPath, repoPath, ['ignore', 'pipe', 'pipe'], budgetSec);
   const readTail = captureTail(child, TAIL_CHARS);
 
   const exited = new Promise<number | null>((resolve) => {
@@ -123,11 +164,9 @@ export async function runPostPull(
   } catch {
     // Detach so "stop waiting" is this module's own doing, not a side effect of
     // whoever exits next: the ref'd child and its pipe sockets would otherwise
-    // hold this process's event loop until the script finishes, hanging an
-    // interactive `teamai pull` for the script's whole remaining runtime.
-    child.unref();
-    (child.stdout as Socket | null)?.unref();
-    (child.stderr as Socket | null)?.unref();
+    // hold this process's event loop until the script finishes, hanging the
+    // pull for the script's whole remaining runtime.
+    detachChild(child);
     log.debug(`postPull: timed out after ${budgetSec}s — orphaned ${scriptPath} (still running)`);
     return;
   }

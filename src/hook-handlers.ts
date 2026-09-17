@@ -77,8 +77,10 @@ const LOCAL_AGENT_TIMEOUT_MS = 15_000;
  * it and index.ts then `process.exit(0)`s, truncating whatever is still running
  * (git children orphaned, later sync stages never run). Cold pulls — fetch,
  * submodule update, resource reconcile — measured 10-25s, so the shared 15s
- * budget silently cut the pull short. Size any background handler that must
- * finish accordingly: this one only bounds a wedged git otherwise.
+ * budget silently cut the pull short. Since the postPull script runs inside
+ * the pull, this budget also covers the deploy wait: POST_PULL_BUDGET_SEC plus
+ * a cold pull's worst case must stay under it (a relation pinned by a test in
+ * post-pull.test.ts).
  */
 export const PULL_TIMEOUT_MS = 120_000;
 

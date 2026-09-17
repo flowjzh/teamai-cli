@@ -8,7 +8,21 @@ import type { TeamaiConfig } from '../types.js';
 const mockLoadTeamConfig = vi.fn();
 vi.mock('../config.js', () => ({ loadTeamConfig: mockLoadTeamConfig }));
 
-const { runPostPull, runDeclaredPostPull, POST_PULL_BUDGET_SEC } = await import('../post-pull.js');
+// spawn is mocked with a passthrough default, so the awaited-mode tests keep
+// real child processes; the interactive test shadows it for one call. The
+// default lives in the factory and afterEach only clears history, so it
+// survives between tests.
+const { mockSpawn } = vi.hoisted(() => ({ mockSpawn: vi.fn() }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  mockSpawn.mockImplementation((...args: Parameters<typeof actual.spawn>) =>
+    actual.spawn(...args) as ReturnType<typeof actual.spawn>,
+  );
+  return { ...actual, spawn: mockSpawn };
+});
+
+const { runPostPull, runDeclaredPostPull, POST_PULL_BUDGET_SEC, COLD_PULL_WORST_CASE_MS } =
+  await import('../post-pull.js');
 const { PULL_TIMEOUT_MS } = await import('../hook-handlers.js');
 const { log } = await import('../utils/logger.js');
 
@@ -22,7 +36,11 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.restoreAllMocks();
+  // Targeted on purpose: restoreAllMocks would strip the factory-set spawn
+  // passthrough. History is what must not leak between tests.
+  debugSpy.mockRestore();
+  mockLoadTeamConfig.mockReset();
+  mockSpawn.mockClear();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -38,10 +56,31 @@ function teamConfig(postPull?: { path: string }): TeamaiConfig {
 }
 
 describe('budget sizing', () => {
-  it('fits under the pull handler deadline minus a cold pull (~25s)', () => {
+  it('fits under the pull handler deadline minus a cold pull', () => {
     // The outcome line must land before the handler deadline can exit the
-    // process; pins the two constants whose relation the comments describe.
-    expect(POST_PULL_BUDGET_SEC * 1000).toBeLessThan(PULL_TIMEOUT_MS - 25_000);
+    // process; pins the constants whose relation the comments describe.
+    expect(POST_PULL_BUDGET_SEC * 1000).toBeLessThan(PULL_TIMEOUT_MS - COLD_PULL_WORST_CASE_MS);
+  });
+});
+
+describe('runDeclaredPostPull (interactive)', () => {
+  it('launches fire-and-forget into the user terminal instead of waiting', async () => {
+    writeScript('post.mjs', 'export {};\n');
+    mockLoadTeamConfig.mockResolvedValue(teamConfig({ path: 'post.mjs' }));
+    const fakeChild = { on: vi.fn(), unref: vi.fn(), stdout: null, stderr: null };
+    mockSpawn.mockReturnValueOnce(fakeChild as never);
+
+    await runDeclaredPostPull(dir, { interactive: true });
+
+    const [command, args, options] = mockSpawn.mock.calls.at(-1)!;
+    expect(command).toBe(process.execPath);
+    expect(args[0]).toBe(path.join(dir, 'post.mjs'));
+    expect(options.stdio).toEqual(['ignore', 'inherit', 'inherit']);
+    expect(options.env.TEAMAI_POSTPULL_TIMEOUT_SEC).toBe(String(POST_PULL_BUDGET_SEC));
+    expect(fakeChild.unref).toHaveBeenCalled();
+    // No waited outcome line for this shape: the user's terminal is the report.
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('unawaited, terminal attached'));
+    expect(debugSpy).not.toHaveBeenCalledWith(expect.stringMatching(/postPull: exited/));
   });
 });
 
@@ -81,13 +120,17 @@ describe('runPostPull (in-process)', () => {
     writeScript(
       'hang.mjs',
       `import fs from 'node:fs';
-       setTimeout(() => fs.writeFileSync(${JSON.stringify(marker)}, 'alive'), 1100);`,
+       import os from 'node:os';
+       // step out of the temp dir: Windows refuses to delete a running
+       // process's cwd, and this orphan outlives the test
+       process.chdir(os.tmpdir());
+       setTimeout(() => fs.writeFileSync(${JSON.stringify(marker)}, 'alive'), 300);`,
     );
 
-    await runPostPull(path.join(dir, 'hang.mjs'), dir, 1);
-    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('postPull: timed out after 1s — orphaned'));
+    await runPostPull(path.join(dir, 'hang.mjs'), dir, 0.05);
+    expect(debugSpy).toHaveBeenCalledWith(expect.stringContaining('postPull: timed out after 0.05s — orphaned'));
 
-    await vi.waitUntil(() => fs.existsSync(marker), { timeout: 10_000, interval: 50 });
+    await vi.waitUntil(() => fs.existsSync(marker), { timeout: 10_000, interval: 25 });
   });
 });
 

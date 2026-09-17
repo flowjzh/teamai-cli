@@ -1713,12 +1713,12 @@ export async function pull(options: GlobalOptions): Promise<void> {
   }
 
   // 6. Team post-pull scripts (teamai.yaml `scripts.postPull`): the team's own
-  //    hook into "the pull finished". Run in-process after the sync locks are
-  //    released so the script's own git/resource work cannot contend with this
-  //    pull; the pull waits for the deploy under the post-pull budget. Nothing
-  //    here can fail the pull — see post-pull.ts.
+  //    hook into "the pull finished", run after the sync locks are released so
+  //    the script's own git/resource work cannot contend with this pull. The
+  //    caller picked the launch shape — see post-pull.ts. Nothing here can
+  //    fail the pull.
   if (!options.dryRun && postPullRepo) {
-    await runDeclaredPostPull(postPullRepo);
+    await runDeclaredPostPull(postPullRepo, { interactive: options.interactive === true });
   }
 }
 

@@ -144,12 +144,12 @@ async function spawnPlainDetached(
 export async function trySpawnDetachedViaWmi(
   command: string,
   args: string[],
-  options: { cwd?: string; stdin?: string; label?: string; platform?: NodeJS.Platform } = {},
+  options: { cwd?: string; stdin?: string; platform?: NodeJS.Platform } = {},
 ): Promise<boolean> {
   // The platform is injectable for the same reason resolveCliPath's is: CI runs
   // ubuntu and macos only, so a hardcoded check would leave this entire path —
   // quoting, script assembly, refusal handling — untested everywhere.
-  const { cwd, stdin, label = 'hook-dispatch', platform = process.platform } = options;
+  const { cwd, stdin, platform = process.platform } = options;
   if (platform !== 'win32') return false;
   // No STDIN (a caller that only needs the escape, not a payload hand-off).
   let payloadFile: string | undefined;
@@ -208,7 +208,7 @@ export async function trySpawnDetachedViaWmi(
   if (payloadFile) fs.rmSync(payloadFile, { force: true });
   // Loud on purpose: a silent fallback here is exactly how the bug this path
   // exists for looked in the field (work never ran, nothing was logged).
-  log.debug(`${label}: WMI escape unavailable (${lastDetail}) with cwd=${workingDir} - falling back to the plain detached spawn`);
+  log.debug(`hook-dispatch: WMI escape unavailable (${lastDetail}) with cwd=${workingDir} - falling back to the plain detached spawn`);
   return false;
 }
 
