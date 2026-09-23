@@ -5,15 +5,19 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { getUserHome } from './utils/home.js';
+import { isOnPath, pathDirs } from './utils/lookpath.js';
+import { log } from './utils/logger.js';
 
 const WORKBUDDY_BUNDLED_NODE_DIR = '.workbuddy/bundled/node/versions';
 const WORKBUDDY_PORTABLE_GIT_DIR = '.workbuddy/binaries/PortableGit/versions';
 
 let _wbShellCache: string | null | undefined;
+let _pathEnsured = false;
 
 /** Reset cached bundled-runtime lookups. Test-only. */
 export function resetBundledRuntimeCache(): void {
   _wbShellCache = undefined;
+  _pathEnsured = false;
 }
 
 /**
@@ -116,6 +120,69 @@ function resolveWorkbuddyShell(): string | null {
     }
   }
   return _wbShellCache;
+}
+
+/**
+ * Dirs a bundled git contributes to PATH, in the order they belong there:
+ * `<root>/cmd` holds the executable itself and goes first, the msys dirs hold
+ * what git shells out to (a credential helper, ssh) and go last. Git-for-
+ * Windows layout, i.e. the same for any host that bundles one.
+ */
+function gitPathDirs(root: string): { first: string[]; last: string[] } {
+  return {
+    first: [path.join(root, 'cmd')],
+    last: [path.join(root, 'usr', 'bin'), path.join(root, 'mingw64', 'bin')],
+  };
+}
+
+/**
+ * Where the GUI hosts keep their bundled git, one resolver per host — the git
+ * counterpart of BUNDLED_SHELLS. An array, not a keyed table: nothing selects a
+ * host here (PATH is process-global and the CLI does not know which host
+ * spawned it), so a key would only invite a per-host lookup that never happens.
+ */
+const BUNDLED_GIT_RESOLVERS: Array<() => string | null> = [
+  () => latestVersionDir(WORKBUDDY_PORTABLE_GIT_DIR), // workbuddy
+];
+
+/**
+ * Put the bundled gits on PATH, so bare-name lookups keep working in a process
+ * the GUI host created without our environment.
+ *
+ * Windows is the case that matters: the session-start pull is spawned through
+ * the WMI service to escape the host's job object (see hook-dispatch-cli.ts),
+ * and a WMI-created process inherits the provider's env, not the caller's — so
+ * the PATH that ran `teamai` never reaches the pull. simple-git then fails with
+ * `spawn git ENOENT` and the pull silently does nothing, while the postPull
+ * script (spawned by absolute path) keeps deploying the stale tree. Bare-name
+ * `git` is not one call site: providers, mr-hint and simple-git all spawn it,
+ * which is why this is a PATH fix rather than a resolver inside createGit.
+ *
+ * A machine that already resolves `git` is left alone, helpers included. Else
+ * the `<cmd>` dirs go first — exactly what WorkBuddy's own teamai.cmd shim puts
+ * on PATH — and the msys dirs are appended, so Windows' own binaries keep
+ * winning.
+ */
+export function ensureBundledRuntimeOnPath(platform: NodeJS.Platform = process.platform): void {
+  if (_pathEnsured || platform !== 'win32') return;
+  _pathEnsured = true;
+  if (isOnPath('git', { platform })) return;
+  const roots = BUNDLED_GIT_RESOLVERS
+    .map(resolve => resolve())
+    .filter((root): root is string => root !== null && fs.existsSync(path.join(root, 'cmd', 'git.exe')));
+  if (roots.length === 0) {
+    log.debug('bundled runtime: no bundled git to add to PATH');
+    return;
+  }
+  const seen = new Set(pathDirs());
+  const fresh = (dir: string) => fs.existsSync(dir) && !seen.has(dir);
+  const dirs = roots.map(gitPathDirs);
+  const prepend = dirs.flatMap(d => d.first).filter(fresh);
+  const append = dirs.flatMap(d => d.last).filter(fresh);
+  if (prepend.length === 0 && append.length === 0) return;
+  const entries = (process.env.PATH ?? '').split(path.delimiter).filter(Boolean);
+  process.env.PATH = [...prepend, ...entries, ...append].join(path.delimiter);
+  log.debug(`bundled runtime: PATH now leads with [${prepend.join('; ')}] and ends with [${append.join('; ')}]`);
 }
 
 /**

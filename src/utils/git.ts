@@ -262,10 +262,12 @@ export async function pullRepo(localPath: string): Promise<string> {
     // path appears once in status.files; subtract the untracked (not_added) ones.
     const dirtyCount = status.files.length - status.not_added.length;
     if (ahead > 0 || dirtyCount > 0) {
-      log.warn(
-        `Team repo diverged from origin/${branch}; realigning discards `
-        + `${ahead} local commit(s) and ${dirtyCount} uncommitted change(s).`,
-      );
+      const notice = `Team repo diverged from origin/${branch}; realigning discards `
+        + `${ahead} local commit(s) and ${dirtyCount} uncommitted change(s).`;
+      log.warn(notice);
+      // This runs inside a hook-spawned pull (no console), where warn alone
+      // leaves no trace; the marker matches the other warn mirrors.
+      log.debug(`WARN: ${notice}`);
     }
     await git.reset(['--hard', `origin/${branch}`]);
     return 'reset to origin (diverged)';

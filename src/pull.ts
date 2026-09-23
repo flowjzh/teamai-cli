@@ -573,9 +573,15 @@ async function pullForScope(
     reportingOnly = refresh.reportingOnly;
     submodulesFailed = refresh.submodulesFailed;
     submodulesChanged = refresh.submodulesChanged;
-    pullSpin.succeed(`[${scopeLabel}] Team repo: ${refresh.label}`);
+    const outcome = `[${scopeLabel}] Team repo: ${refresh.label}`;
+    pullSpin.succeed(outcome);
+    log.debug(outcome);
   } catch (e) {
-    pullSpin.fail(`[${scopeLabel}] Pull failed: ${(e as Error).message}`);
+    const reason = `[${scopeLabel}] Pull failed: ${(e as Error).message}`;
+    pullSpin.fail(reason);
+    // The spinner is console-only and a hook-driven pull runs detached, so
+    // persist the reason; the marker matches the other warn mirrors.
+    log.debug(`WARN: ${reason}`);
     return;
   }
 

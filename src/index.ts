@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { Command, Option } from 'commander';
 import { setVerbose, setSilent, log } from './utils/logger.js';
+import { ensureBundledRuntimeOnPath } from './bundled-runtime.js';
 import type { GlobalOptions } from './types.js';
 import { TEAMAI_HOOK_SUBCOMMANDS } from './hooks.js';
 import { registerPackagesCommand } from './pkg/register-command.js';
@@ -1120,5 +1121,9 @@ recallCmd
       dryRun: cmdOpts.dryRun,
     });
   });
+
+// Bundled runtimes first: a hook-spawned command may not inherit our PATH
+// (see bundled-runtime.ts) and pull shells out to git.
+ensureBundledRuntimeOnPath();
 
 program.parse();
